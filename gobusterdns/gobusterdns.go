@@ -4,12 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/OJ/gobuster/v3/libgobuster"
 	"github.com/google/uuid"
@@ -44,8 +44,8 @@ func newCustomDialer(server string) func(ctx context.Context, network, address s
 	}
 }
 
-// NewGobusterDNS creates a new initialized GobusterDNS
-func NewGobusterDNS(globalopts *libgobuster.Options, opts *OptionsDNS) (*GobusterDNS, error) {
+// New creates a new initialized GobusterDNS
+func New(globalopts *libgobuster.Options, opts *OptionsDNS) (*GobusterDNS, error) {
 	if globalopts == nil {
 		return nil, fmt.Errorf("please provide valid global options")
 	}
@@ -112,41 +112,54 @@ func (d *GobusterDNS) PreRun(ctx context.Context, progress *libgobuster.Progress
 func (d *GobusterDNS) ProcessWord(ctx context.Context, word string, progress *libgobuster.Progress) error {
 	subdomain := fmt.Sprintf("%s.%s", word, d.options.Domain)
 	if !d.options.NoFQDN && !strings.HasSuffix(subdomain, ".") {
-		// add a . to indicate this is the full domain and we do not want to traverse the search domains on the system
+		// add a . to indicate this is the full domain, and we do not want to traverse the search domains on the system
 		subdomain = fmt.Sprintf("%s.", subdomain)
 	}
+
+	// add some debug output
+	if d.globalopts.Debug {
+		progress.MessageChan <- libgobuster.Message{
+			Level:   libgobuster.LevelDebug,
+			Message: fmt.Sprintf("trying subdomain %s", subdomain),
+		}
+	}
+
 	ips, err := d.dnsLookup(ctx, subdomain)
-	if err == nil {
-		if !d.isWildcard || !d.wildcardIps.ContainsAny(ips) {
-			result := Result{
-				Subdomain: subdomain,
-				Found:     true,
-				ShowIPs:   d.options.ShowIPs,
-				ShowCNAME: d.options.ShowCNAME,
-				NoFQDN:    d.options.NoFQDN,
-			}
-			if d.options.ShowIPs {
-				result.IPs = ips
-			} else if d.options.ShowCNAME {
-				cname, err := d.dnsLookupCname(ctx, subdomain)
-				if err == nil {
-					result.CNAME = cname
+	if err != nil {
+		var wErr *net.DNSError
+		if errors.As(err, &wErr) && wErr.IsNotFound {
+			// host not found is the expected error here
+			return nil
+		}
+		return err
+	}
+
+	if !d.isWildcard || !d.wildcardIps.ContainsAny(ips) {
+		result := Result{
+			Subdomain: strings.TrimSuffix(subdomain, "."),
+		}
+
+		if d.options.ShowIPs {
+			result.IPs = ips
+		}
+		if d.options.CheckCNAME {
+			cname, err := d.dnsLookupCname(ctx, subdomain)
+			if err == nil {
+				result.CNAME = cname
+			} else {
+				var wErr *net.DNSError
+				if !errors.As(err, &wErr) && !wErr.IsNotFound {
+					// host not found is the expected error here, send all other errors to the error channel
+					progress.ErrorChan <- err
 				}
 			}
-			progress.ResultChan <- result
 		}
-	} else if d.globalopts.Verbose {
-		progress.ResultChan <- Result{
-			Subdomain: subdomain,
-			Found:     false,
-			ShowIPs:   d.options.ShowIPs,
-			ShowCNAME: d.options.ShowCNAME,
-		}
+		progress.ResultChan <- result
 	}
 	return nil
 }
 
-func (d *GobusterDNS) AdditionalWords(word string) []string {
+func (d *GobusterDNS) AdditionalWords(_ string) []string {
 	return []string{}
 }
 
@@ -177,8 +190,8 @@ func (d *GobusterDNS) GetConfigString() (string, error) {
 		}
 	}
 
-	if o.ShowCNAME {
-		if _, err := fmt.Fprintf(tw, "[+] Show CNAME:\ttrue\n"); err != nil {
+	if o.CheckCNAME {
+		if _, err := fmt.Fprintf(tw, "[+] Check CNAME:\ttrue\n"); err != nil {
 			return "", err
 		}
 	}
@@ -213,12 +226,6 @@ func (d *GobusterDNS) GetConfigString() (string, error) {
 		}
 	}
 
-	if d.globalopts.Verbose {
-		if _, err := fmt.Fprintf(tw, "[+] Verbose:\ttrue\n"); err != nil {
-			return "", err
-		}
-	}
-
 	if err := tw.Flush(); err != nil {
 		return "", fmt.Errorf("error on tostring: %w", err)
 	}
@@ -239,6 +246,5 @@ func (d *GobusterDNS) dnsLookup(ctx context.Context, domain string) ([]netip.Add
 func (d *GobusterDNS) dnsLookupCname(ctx context.Context, domain string) (string, error) {
 	ctx2, cancel := context.WithTimeout(ctx, d.options.Timeout)
 	defer cancel()
-	time.Sleep(time.Second)
 	return d.resolver.LookupCNAME(ctx2, domain)
 }

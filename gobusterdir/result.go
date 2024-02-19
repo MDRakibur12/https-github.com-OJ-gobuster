@@ -19,64 +19,35 @@ var (
 
 // Result represents a single result
 type Result struct {
-	URL        string
 	Path       string
-	Verbose    bool
-	Expanded   bool
-	NoStatus   bool
-	HideLength bool
-	Found      bool
 	Header     http.Header
 	StatusCode int
 	Size       int64
 }
 
-// ResultToString converts the Result to it's textual representation
+// ResultToString converts the Result to its textual representation
 func (r Result) ResultToString() (string, error) {
 	buf := &bytes.Buffer{}
-
-	// Prefix if we're in verbose mode
-	if r.Verbose {
-		if r.Found {
-			if _, err := fmt.Fprintf(buf, "Found: "); err != nil {
-				return "", err
-			}
-		} else {
-			if _, err := fmt.Fprintf(buf, "Missed: "); err != nil {
-				return "", err
-			}
-		}
-	}
-
-	if r.Expanded {
-		if _, err := fmt.Fprintf(buf, "%s", r.URL); err != nil {
-			return "", err
-		}
-	} else {
-		if _, err := fmt.Fprintf(buf, "/"); err != nil {
-			return "", err
-		}
-	}
-	if _, err := fmt.Fprintf(buf, "%-20s", r.Path); err != nil {
+	if _, err := buf.WriteString(r.Path); err != nil {
 		return "", err
 	}
 
-	if !r.NoStatus {
-		color := white
+	if r.StatusCode >= 0 {
+		textColor := white
 		if r.StatusCode == 200 {
-			color = green
+			textColor = green
 		} else if r.StatusCode >= 300 && r.StatusCode < 400 {
-			color = cyan
+			textColor = cyan
 		} else if r.StatusCode >= 400 && r.StatusCode < 500 {
-			color = yellow
+			textColor = yellow
 		} else if r.StatusCode >= 500 && r.StatusCode < 600 {
-			color = red
+			textColor = red
 		}
 
-		color(buf, " (Status: %d)", r.StatusCode)
+		textColor(buf, " (Status: %d)", r.StatusCode)
 	}
 
-	if !r.HideLength {
+	if r.Size >= 0 {
 		if _, err := fmt.Fprintf(buf, " [Size: %d]", r.Size); err != nil {
 			return "", err
 		}

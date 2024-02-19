@@ -1,8 +1,10 @@
-package cmd
+package vhost
 
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -12,11 +14,21 @@ import (
 	"github.com/OJ/gobuster/v3/libgobuster"
 )
 
+func httpServer(b *testing.B, content string) *httptest.Server {
+	b.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := fmt.Fprint(w, content); err != nil {
+			b.Fatalf("%v", err)
+		}
+	}))
+	return ts
+}
+
 func BenchmarkVhostMode(b *testing.B) {
 	h := httpServer(b, "test")
 	defer h.Close()
 
-	pluginopts := gobustervhost.NewOptionsVhost()
+	pluginopts := gobustervhost.NewOptions()
 	pluginopts.URL = h.URL
 	pluginopts.Timeout = 10 * time.Second
 
@@ -28,7 +40,9 @@ func BenchmarkVhostMode(b *testing.B) {
 	for w := 0; w < 1000; w++ {
 		_, _ = wordlist.WriteString(fmt.Sprintf("%d\n", w))
 	}
-	wordlist.Close()
+	if err := wordlist.Close(); err != nil {
+		b.Fatalf("%v", err)
+	}
 
 	globalopts := libgobuster.Options{
 		Threads:    10,
@@ -51,7 +65,7 @@ func BenchmarkVhostMode(b *testing.B) {
 	for x := 0; x < b.N; x++ {
 		os.Stdout = devnull
 		os.Stderr = devnull
-		plugin, err := gobustervhost.NewGobusterVhost(&globalopts, pluginopts)
+		plugin, err := gobustervhost.New(&globalopts, pluginopts, log)
 		if err != nil {
 			b.Fatalf("error on creating gobusterdir: %v", err)
 		}

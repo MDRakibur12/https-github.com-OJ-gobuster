@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 )
@@ -29,6 +30,7 @@ type HTTPClient struct {
 	cookies               string
 	method                string
 	host                  string
+	logger                *Logger
 }
 
 // RequestOptions is used to pass options to a single individual request
@@ -42,7 +44,7 @@ type RequestOptions struct {
 }
 
 // NewHTTPClient returns a new HTTPClient
-func NewHTTPClient(opt *HTTPOptions) (*HTTPClient, error) {
+func NewHTTPClient(opt *HTTPOptions, logger *Logger) (*HTTPClient, error) {
 	var proxyURLFunc func(*http.Request) (*url.URL, error)
 	var client HTTPClient
 	proxyURLFunc = http.ProxyFromEnvironment
@@ -104,10 +106,11 @@ func NewHTTPClient(opt *HTTPOptions) (*HTTPClient, error) {
 			break
 		}
 	}
+	client.logger = logger
 	return &client, nil
 }
 
-// Request makes an http request and returns the status, the content length, the headers, the body and an error
+// Request makes a http request and returns the status, the content length, the headers, the body and an error
 // if you want the body returned set the corresponding property inside RequestOptions
 func (client *HTTPClient) Request(ctx context.Context, fullURL string, opts RequestOptions) (int, int64, http.Header, []byte, error) {
 	resp, err := client.makeRequest(ctx, fullURL, opts)
@@ -153,7 +156,7 @@ func (client *HTTPClient) makeRequest(ctx context.Context, fullURL string, opts 
 		req.Header.Set("Cookie", client.cookies)
 	}
 
-	// Use host for VHOST mode on a per request basis, otherwise the one provided from headers
+	// Use host for VHOST mode on a per-request basis, otherwise the one provided from headers
 	if opts.Host != "" {
 		req.Host = opts.Host
 	} else if client.host != "" {
@@ -171,6 +174,11 @@ func (client *HTTPClient) makeRequest(ctx context.Context, fullURL string, opts 
 	// currently only relevant on fuzzing
 	if len(opts.ModifiedHeaders) > 0 {
 		for _, h := range opts.ModifiedHeaders {
+			// empty headers are not valid (happens when fuzzing the host header for example because the slice is initialized with the provided header length)
+			if h.Name == "" {
+				continue
+			}
+
 			if client.noCanonicalizeHeaders {
 				// https://stackoverflow.com/questions/26351716/how-to-keep-key-case-sensitive-in-request-header-using-golang
 				req.Header[h.Name] = []string{h.Value}
@@ -193,6 +201,14 @@ func (client *HTTPClient) makeRequest(ctx context.Context, fullURL string, opts 
 		req.SetBasicAuth(opts.UpdatedBasicAuthUsername, opts.UpdatedBasicAuthPassword)
 	} else if client.username != "" {
 		req.SetBasicAuth(client.username, client.password)
+	}
+
+	if client.logger.debug {
+		dump, err := httputil.DumpRequestOut(req, false)
+		if err != nil {
+			return nil, err
+		}
+		client.logger.Debugf("%s", dump)
 	}
 
 	resp, err := client.client.Do(req)

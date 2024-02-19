@@ -5,11 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
-	"net"
+	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 
 	"github.com/OJ/gobuster/v3/libgobuster"
@@ -23,8 +26,8 @@ type GobusterS3 struct {
 	bucketRegex *regexp.Regexp
 }
 
-// NewGobusterS3 creates a new initialized GobusterS3
-func NewGobusterS3(globalopts *libgobuster.Options, opts *OptionsS3) (*GobusterS3, error) {
+// New creates a new initialized GobusterS3
+func New(globalopts *libgobuster.Options, opts *OptionsS3, logger *libgobuster.Logger) (*GobusterS3, error) {
 	if globalopts == nil {
 		return nil, fmt.Errorf("please provide valid global options")
 	}
@@ -54,7 +57,7 @@ func NewGobusterS3(globalopts *libgobuster.Options, opts *OptionsS3) (*GobusterS
 		FollowRedirect: true,
 	}
 
-	h, err := libgobuster.NewHTTPClient(&httpOpts)
+	h, err := libgobuster.NewHTTPClient(&httpOpts, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +73,7 @@ func (s *GobusterS3) Name() string {
 }
 
 // PreRun is the pre run implementation of GobusterS3
-func (s *GobusterS3) PreRun(ctx context.Context, progress *libgobuster.Progress) error {
+func (s *GobusterS3) PreRun(_ context.Context, _ *libgobuster.Progress) error {
 	return nil
 }
 
@@ -82,6 +85,14 @@ func (s *GobusterS3) ProcessWord(ctx context.Context, word string, progress *lib
 	}
 
 	bucketURL := fmt.Sprintf("https://%s.s3.amazonaws.com/?max-keys=%d", word, s.options.MaxFilesToList)
+
+	// add some debug output
+	if s.globalopts.Debug {
+		progress.MessageChan <- libgobuster.Message{
+			Level:   libgobuster.LevelDebug,
+			Message: fmt.Sprintf("trying word %s", word),
+		}
+	}
 
 	tries := 1
 	if s.options.RetryOnTimeout && s.options.RetryAttempts > 0 {
@@ -97,14 +108,21 @@ func (s *GobusterS3) ProcessWord(ctx context.Context, word string, progress *lib
 		if err != nil {
 			// check if it's a timeout and if we should try again and try again
 			// otherwise the timeout error is raised
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() && i != tries {
+			if os.IsTimeout(err) && i != tries {
 				continue
 			} else if strings.Contains(err.Error(), "invalid control character in URL") {
-				// put error in error chan so it's printed out and ignore it
+				// put error in error chan, so it's printed out and ignore it
 				// so gobuster will not quit
 				progress.ErrorChan <- err
 				continue
 			} else {
+				if errors.Is(err, io.EOF) {
+					return libgobuster.ErrorEOF
+				} else if os.IsTimeout(err) {
+					return libgobuster.ErrorTimeout
+				} else if errors.Is(err, syscall.ECONNREFUSED) {
+					return libgobuster.ErrorConnectionRefused
+				}
 				return err
 			}
 		}
@@ -137,7 +155,7 @@ func (s *GobusterS3) ProcessWord(ctx context.Context, word string, progress *lib
 	}
 
 	extraStr := ""
-	if s.globalopts.Verbose {
+	if s.options.ShowFiles {
 		// get status
 		if bytes.Contains(body, []byte("<Error>")) {
 			awsError := AWSError{}
@@ -171,7 +189,7 @@ func (s *GobusterS3) ProcessWord(ctx context.Context, word string, progress *lib
 	return nil
 }
 
-func (d *GobusterS3) AdditionalWords(word string) []string {
+func (s *GobusterS3) AdditionalWords(_ string) []string {
 	return []string{}
 }
 
@@ -222,8 +240,8 @@ func (s *GobusterS3) GetConfigString() (string, error) {
 		return "", err
 	}
 
-	if s.globalopts.Verbose {
-		if _, err := fmt.Fprintf(tw, "[+] Verbose:\ttrue\n"); err != nil {
+	if s.options.ShowFiles {
+		if _, err := fmt.Fprintf(tw, "[+] Show Files:\ttrue\n"); err != nil {
 			return "", err
 		}
 	}

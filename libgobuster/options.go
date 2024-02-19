@@ -11,15 +11,8 @@ type Options struct {
 	PatternFile    string
 	Patterns       []string
 	OutputFilename string
-	NoStatus       bool
 	NoProgress     bool
 	NoError        bool
 	Quiet          bool
-	Verbose        bool
 	Delay          time.Duration
-}
-
-// NewOptions returns a new initialized Options object
-func NewOptions() *Options {
-	return &Options{}
 }

@@ -25,13 +25,13 @@ type ResultToStringFunc func(*Gobuster, *Result) (*string, error)
 // Gobuster is the main object when creating a new run
 type Gobuster struct {
 	Opts     *Options
-	Logger   Logger
+	Logger   *Logger
 	plugin   GobusterPlugin
 	Progress *Progress
 }
 
 // NewGobuster returns a new Gobuster object
-func NewGobuster(opts *Options, plugin GobusterPlugin, logger Logger) (*Gobuster, error) {
+func NewGobuster(opts *Options, plugin GobusterPlugin, logger *Logger) (*Gobuster, error) {
 	var g Gobuster
 	g.Opts = opts
 	g.plugin = plugin
@@ -55,8 +55,8 @@ func (g *Gobuster) worker(ctx context.Context, wordChan <-chan string, wg *sync.
 			g.Progress.incrementRequests()
 
 			wordCleaned := strings.TrimSpace(word)
-			// Skip "comment" (starts with #), as well as empty lines
-			if strings.HasPrefix(wordCleaned, "#") || len(wordCleaned) == 0 {
+			// Skip empty lines
+			if len(wordCleaned) == 0 {
 				break
 			}
 
@@ -64,7 +64,7 @@ func (g *Gobuster) worker(ctx context.Context, wordChan <-chan string, wg *sync.
 			err := g.plugin.ProcessWord(ctx, wordCleaned, g.Progress)
 			if err != nil {
 				// do not exit and continue
-				g.Progress.ErrorChan <- err
+				g.Progress.ErrorChan <- fmt.Errorf("error on word %s: %w", wordCleaned, err)
 				continue
 			}
 
